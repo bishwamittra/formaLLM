@@ -512,30 +512,23 @@ def get_grammatical_sentences(grammar,
     warning_printed = False
     num_samples_effective = 1 * num_samples
     for (sentence, prob), non_terminal_applied_position in tqdm(grammar.generate(num_samples_effective, seed=seed), disable=False):
-            # if len(sentence) == 0:
-            #     continue
-            sentence = tuple(sentence)
-            if(sentence not in sentence_prob_dict):
-                    sentence_prob_dict[sentence] = prob
-                    sentence_to_non_terminal_applied_position_map[sentence] = refine_non_terminal_applied_position(non_terminal_applied_position) 
-            else:
-                    if not np.isclose(sentence_prob_dict[sentence], prob):
-                        # ambiguous grammar. A loose comparison is used here
-                        if not warning_printed:
-                            print(f"Found sentences with different probabilities! {sentence_prob_dict[sentence]} vs {prob}")
-                            warning_printed = True
-                        sentence_prob_dict[sentence] += prob
+        sentence = tuple(sentence)
+        if(sentence not in sentence_prob_dict):
+            sentence_prob_dict[sentence] = prob
+            sentence_to_non_terminal_applied_position_map[sentence] = refine_non_terminal_applied_position(non_terminal_applied_position) 
+        else:
+            if not np.isclose(sentence_prob_dict[sentence], prob):
+                # ambiguous grammar. A loose comparison is used here
+                if not warning_printed:
+                    print(f"Found sentences with different probabilities! {sentence_prob_dict[sentence]} vs {prob}")
+                    warning_printed = True
+                sentence_prob_dict[sentence] += prob
 
-            if(sentence not in sentence_freq):
-                    sentence_freq[sentence] = 1
-            else:
-                    sentence_freq[sentence] += 1
-            sentences.append(sentence)
-            # print(sentence)
-            # print(prob)
-            # print(non_terminal_applied_position)
-            # print(refine_non_terminal_applied_position(non_terminal_applied_position))
-            # print()
+        if(sentence not in sentence_freq):
+            sentence_freq[sentence] = 1
+        else:
+            sentence_freq[sentence] += 1
+        sentences.append(sentence)
 
     return sentences, sentence_to_non_terminal_applied_position_map, sentence_freq, sentence_prob_dict
 
@@ -545,6 +538,12 @@ def get_nongrammatical_sentences_from_perturbed_grammar(base_grammar,
                                                     num_samples, 
                                                     seed):
     
+    """
+        Adapted from get_grammatical_sentences function. 
+        Additional parameter is the base grammar, where we check if the generated sentence is grammatically correct
+        or not (w.r.t. the base grammar). If grammatically correct, we skip it. 
+    """
+
     # base_grammar_parser = RecursiveDescentParser(base_grammar)
     base_grammar_parser = BottomUpLeftCornerChartParser(base_grammar)
     sentence_prob_dict = {}
@@ -554,32 +553,27 @@ def get_nongrammatical_sentences_from_perturbed_grammar(base_grammar,
     num_samples_effective = 5 * num_samples
     found_samples = 0
     for (sentence, prob), non_terminal_applied_position in tqdm(perturbed_grammar.generate(num_samples_effective, seed=seed), disable=False):
-            if check_sequence_exists(base_grammar_parser, sentence):
-                continue
-            found_samples += 1
-            sentence = tuple(sentence)
-            if(sentence not in sentence_prob_dict):
-                    sentence_prob_dict[sentence] = prob
-                    sentence_to_non_terminal_applied_position_map[sentence] = refine_non_terminal_applied_position(non_terminal_applied_position) 
-            else:
-                    if not np.isclose(sentence_prob_dict[sentence], prob):
-                        # ambiguous grammar. A loose comparison is used here
-                        print(f"Found sentences with different probabilities! {sentence_prob_dict[sentence]} vs {prob}")
-                        sentence_prob_dict[sentence] += prob
+        if check_sequence_exists(base_grammar_parser, sentence): # if the sentence is grammatical, skip
+            continue
+        found_samples += 1
+        sentence = tuple(sentence)
+        if(sentence not in sentence_prob_dict):
+            sentence_prob_dict[sentence] = prob
+            sentence_to_non_terminal_applied_position_map[sentence] = refine_non_terminal_applied_position(non_terminal_applied_position) 
+        else:
+            if not np.isclose(sentence_prob_dict[sentence], prob):
+                # ambiguous grammar. A loose comparison is used here
+                print(f"Found sentences with different probabilities! {sentence_prob_dict[sentence]} vs {prob}")
+                sentence_prob_dict[sentence] += prob
 
-            if(sentence not in sentence_freq):
-                    sentence_freq[sentence] = 1
-            else:
-                    sentence_freq[sentence] += 1
-            sentences.append(sentence)
-            # print(sentence)
-            # print(prob)
-            # print(non_terminal_applied_position)
-            # print(refine_non_terminal_applied_position(non_terminal_applied_position))
-            # print()
-
-            if found_samples >= num_samples:
-                break
+        if(sentence not in sentence_freq):
+            sentence_freq[sentence] = 1
+        else:
+            sentence_freq[sentence] += 1
+        sentences.append(sentence)
+        
+        if found_samples >= num_samples:
+            break
 
     return sentences, sentence_to_non_terminal_applied_position_map, sentence_freq, sentence_prob_dict
 

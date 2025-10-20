@@ -18,6 +18,7 @@ from tqdm import tqdm
 import torch.distributed as dist
 import time
 from copy import deepcopy
+from transformers.cache_utils import Cache
 
     
 
@@ -47,13 +48,13 @@ def get_parser():
     parser.add_argument("--run_seed", type=int, default=None, help="Random seed for experiments")
     parser.add_argument("--exclude_test_data", action='store_true', help="Exclude test data")
     parser.add_argument("--include_edit_distance_eval", action='store_true', help="Include edit distance eval datasets")
+    parser.add_argument("--include_edit_distance_1_eval", action='store_true', help="Include edit distance eval datasets")
     parser.add_argument("--include_grammar_edit_eval", action='store_true', help="Include grammar_edit eval datasets")
     parser.add_argument("--include_incorrect_random_eval", action='store_true', help="Include incorrect random eval datasets")
     parser.add_argument("--combine_edit_distance", action='store_true', help="Combine edit distance datasets")
     parser.add_argument("--save_checkpoint", action='store_true', help="Save checkpoint")
     parser.add_argument("--save_final_checkpoint", action='store_true', help="Save final checkpoint")
     parser.add_argument("--save_best_model", action='store_true', help="Save the best checkpoint")
-    parser.add_argument("--inference_only_mode", action='store_true', help="Inference only mode")
     parser.add_argument("--incontext_input", action='store_true', help="Process input as incontext input")
     parser.add_argument("--use_deepspeed", action='store_true', help="Use deepspeed")
     parser.add_argument("--max_new_tokens", default=1, type=int, help="Max new tokens to generate in text generation mode")
@@ -75,9 +76,14 @@ def get_parser():
     # local prefix
     parser.add_argument("--global_prefix_config", type=str, default='no_global_prefix', help="Configuration of global prefix")
 
-    # memorization intervention
-    parser.add_argument("--memorization_intervention", type=str, default=None, help="Memorization intervention pivot directory")
-    parser.add_argument("--memorization_approach", type=str, default="contextual_memorization", help="Memorization intervention approach")
+    # memorization-aware training
+    parser.add_argument("--memorization_algo", type=str, default='no_intervention') # deduplication, remove_after_memorized, remove_after_memorized_and_add_when_forgot
+
+    # nlp dataset & instruction
+    parser.add_argument("--nlp_dataset", action='store_true', help="NLP dataset")
+    parser.add_argument("--add_instruction", action='store_true', help="Add instruction")
+    parser.add_argument("--instruction_index", default=0, type=int, help="Instruction index")
+    parser.add_argument("--instruction", default=None, type=str, help="Instruction")
     return parser
 
 
@@ -87,16 +93,22 @@ separator_dict = {
     "semicolon": ";",
     "comma": ",",
     "colon": ":",
-    "period": "."
+    "period": ".",
+    "double_newline": "\n\n"
 }
 
 
 
 def process_for_under_trained_tokens(args, tokenizer, dataset, selected_token_ids):
+    """
+        Derived from https://github.com/cohere-ai/magikarp
+    """
     under_trained_token_id_list = {
         "mistralai/Mistral-7B-v0.3": [32506, 21186, 27404, 27175, 27160, 26851, 19527, 10591, 26601, 8376, 28939, 23907, 15824, 18463, 32131, 12961, 17711, 15524, 21460, 11046],
         "EleutherAI/pythia-6.9b": [26868, 28696, 17030, 37402, 41606, 26362, 15479, 30356, 14798, 39743, 15236],
         "Qwen/Qwen2.5-7B": [78783, 79269, 79270, 83969, 83971, 142386, 97000, 136954, 78323, 88372, 142494, 88371, 138175, 122290, 122474, 127734, 151293, 122223, 122578, 117332],
+        "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/vnanda/Llama-2-7b-hf": [28574, 20609, 3798, 12731, 28354, 28633, 31664, 23313, 11193, 12882, 9831],
+        "base_models_vnanda/Llama-2-7b-hf": [28574, 20609, 3798, 12731, 28354, 28633, 31664, 23313, 11193, 12882, 9831],
         "meta-llama/Meta-Llama-3.1-8B": [85071, 107658, 127896, 103003, 126523, 80369, 79883, 106710, 68896, 118508, 89472, 127117, 126647, 124292, 122549, 122746, 64424, 85069, 80370, 125952]
     }
 
@@ -129,55 +141,51 @@ def get_args(parser):
     assert args.max_steps != -1 or args.num_train_epochs != -1, "Either max_steps or num_train_epochs should be specified"
 
     if args.incontext_input:
-        assert args.inference_only_mode
-    
-    if args.inference_only_mode:
         args.use_deepspeed = False
 
     return args
 
-def prepare_input_for_incontext(data_dict, num_incontext_examples, num_incontext_repetitions=1, incontext_data_source=None, separator="semicolon", seed=5):   
+def prepare_input_for_incontext(data_dict,
+                                num_incontext_examples, 
+                                num_incontext_repetitions=1, 
+                                separator="semicolon",
+                                is_nlp_dataset=False,
+                                seed=5):
+    
     separator = separator_dict[separator]
 
     # From training examples
     incontext_common_prefix = []
     incontext_dataset = None
-    if incontext_data_source is not None:
-        [incontext_data_source_filename, incontext_dataset_name] = incontext_data_source.split(":")
-        incontext_dataset = pickle.load(open(incontext_data_source_filename, "rb"))[incontext_dataset_name]
-        random.seed(seed)
-        random.shuffle(incontext_dataset)
-        print(f"Applying incontext learning from {incontext_data_source_filename} with dataset {incontext_dataset_name}")
-    else:
-        assert "train_sequences" in data_dict.keys()
-        incontext_dataset = data_dict["train_sequences"]
-        print(f"Applying incontext learning from training data")
+    assert "train_sequences" in data_dict.keys()
+    incontext_dataset = data_dict["train_sequences"]
 
     
     for _ in range(num_incontext_repetitions):
         for sequence in incontext_dataset[:num_incontext_examples]:
-            incontext_common_prefix.extend(list(sequence))
+            if is_nlp_dataset:
+                incontext_common_prefix.extend(sequence)
+            else:   
+                incontext_common_prefix.extend(list(sequence))
             incontext_common_prefix.append(separator)
 
+    if is_nlp_dataset:
+        incontext_common_prefix = "".join(incontext_common_prefix)
 
     result = {}
     for key in data_dict.keys():
-        # if key == "train_sequences":
-        #     # result[key] = data_dict[key]
-        #     # continue
-        #     data_dict[key] = data_dict[key][:max(1, num_incontext_examples)]
-        
-        # result[key] = []
-        # for sequence in data_dict[key]:
-        #     result[key].append(tuple(incontext_common_prefix + list(sequence)))
-    
         result[key] = data_dict[key]
+
+
     if len(incontext_common_prefix) > 0:
-        result['incontext_common_prefix'] = [tuple(incontext_common_prefix)]
+        if is_nlp_dataset:
+            result['incontext_common_prefix'] = [incontext_common_prefix]
+        else:
+            result['incontext_common_prefix'] = [tuple(incontext_common_prefix)]
 
     return result, incontext_common_prefix
 
-def get_data(args, verbose=False):
+def get_data(args, verbose=True):
     data_path = "../data"
     if("data_comment" in vars(args) and args.data_comment is not None):
         filename = f"{data_path}/{args.grammar_name}/sequences_w_edit_distance_{args.grammar_name}_{args.num_samples}_{args.data_seed}_{args.data_comment}.pkl"
@@ -188,53 +196,59 @@ def get_data(args, verbose=False):
         print(f"Loading sequences from {filename}")
         with open(filename, 'rb') as f:
             raw_data_dict = pickle.load(f)
-            assert 'train_sequences' in raw_data_dict.keys()
+            
+            # in training source is different
+            if args.incontext_data_source is not None:
+                assert ":" in args.incontext_data_source
+                [training_data_grammar_name, training_dataset_name] = args.incontext_data_source.split(":")
+                train_sequences = pickle.load(open(f"{data_path}/{training_data_grammar_name}/sequences_w_edit_distance_{training_data_grammar_name}_{args.num_samples}_{args.data_seed}.pkl", "rb"))[training_dataset_name]
+                print(f"Applying incontext learning from {training_data_grammar_name} with dataset {training_dataset_name}")
+                raw_data_dict['train_sequences'] = train_sequences
+
+
             if args.run_seed is None:
                 args.run_seed = args.data_seed
                 # no need to shuffle
             else:
                 random.seed(args.run_seed)
-                random.shuffle(raw_data_dict['train_sequences'])
-            if args.grammar_name == "pcfg_g1_g2_combined":
-                print("Merging train sequences of two grammars")
-                train_sequences = []
-                train_sequences_g1 = []
-                train_sequences_g2 = []
-                for sequence in raw_data_dict['train_sequences']:
-                    assert len(sequence) == 2
-                    train_sequences.append(sequence[0])
-                    train_sequences.append(sequence[1])
+                if args.grammar_name.endswith("multilingual"):
+                    assert "train_sequences" not in raw_data_dict
+                    assert "train_sequences_g1" in raw_data_dict
+                    assert "train_sequences_g2" in raw_data_dict
+                    random.shuffle(raw_data_dict['train_sequences_g1'])
+                    random.shuffle(raw_data_dict['train_sequences_g2'])
+                    train_sequences = []
+                    for i in range(args.considered_training_samples):
+                        train_sequences.append(raw_data_dict['train_sequences_g1'][i])
+                        train_sequences.append(raw_data_dict['train_sequences_g2'][i])
 
-                    train_sequences_g1.append(sequence[0])
-                    train_sequences_g2.append(sequence[1])
-                    
-                raw_data_dict['train_sequences'] = train_sequences
-                raw_data_dict['train_sequences_g1'] = train_sequences_g1
-                raw_data_dict['train_sequences_g2'] = train_sequences_g2
-
-                # a test set combining two grammars
-                raw_data_dict['test_sequences'] = raw_data_dict['test_sequences_g1'][:args.considered_eval_samples//2] + raw_data_dict['test_sequences_g2'][:args.considered_eval_samples//2]
-
-                raw_data_dict['train_sequences_g1'] = raw_data_dict['train_sequences_g1'][:args.considered_eval_samples]
-                raw_data_dict['train_sequences_g2'] = raw_data_dict['train_sequences_g2'][:args.considered_eval_samples]
-
-
+                    if False:
+                        # we might want to add more training examples from g2, and reshuffle
+                        for i in range(2*args.considered_training_samples):
+                            train_sequences.append(raw_data_dict['train_sequences_g2'][i])
+                    random.shuffle(train_sequences)
+            
+                    raw_data_dict['train_sequences'] = train_sequences
+                    del raw_data_dict['train_sequences_g1']
+                    del raw_data_dict['train_sequences_g2']
+                else:
+                    assert 'train_sequences' in raw_data_dict.keys()
+                    random.shuffle(raw_data_dict['train_sequences'])
+            
 
             raw_data_dict['train_sequences'] = raw_data_dict['train_sequences'][args.skip_training_samples:]
-            # assert 'test_sequences' in raw_data_dict.keys()
-            # if "test_sequences" in raw_data_dict.keys():
-            #     assert len(raw_data_dict['train_sequences']) + len(raw_data_dict['test_sequences']) == args.num_samples
+            
 
     else:
         raise ValueError(f"File {filename} does not exist")
 
-    if(args.considered_training_samples is not None):
+    if (args.considered_training_samples is not None) and (not args.grammar_name.endswith("multilingual")):
         assert args.considered_training_samples >= 0
         if args.considered_training_samples == 0 and args.incontext_input:
             args.considered_training_samples = 1
         raw_data_dict['train_sequences'] = raw_data_dict['train_sequences'][:args.considered_training_samples]
 
-    # combine edit distance diff position into 1 datasetx
+    # combine edit distance diff position into 1 dataset
     if('combine_edit_distance' in vars(args) and args.combine_edit_distance):
         modified_data_dict = {}
         delete_keys = []
@@ -271,13 +285,7 @@ def get_data(args, verbose=False):
         for counterfactual_string in raw_data_dict[f"counterfactual_{args.counterfactual_string_index}"][:considered_counterfactual_string]:
             raw_data_dict['train_sequences'].append(counterfactual_string)
 
-        # quit()
-        # print(len(raw_data_dict['train_sequences']))
-        # shuffle
         random.shuffle(raw_data_dict['train_sequences'])
-        # for sequence in raw_data_dict['train_sequences'][-10:]:
-        #     print(sequence[:20])
-        # quit()
         
 
 
@@ -285,36 +293,81 @@ def get_data(args, verbose=False):
         raw_data_dict, incontext_common_prefix = prepare_input_for_incontext(raw_data_dict, 
                                                                              num_incontext_examples=args.considered_incontext_examples,
                                                                              num_incontext_repetitions=args.considered_incontext_repetitions, 
-                                                                             incontext_data_source=args.incontext_data_source,
                                                                              separator=args.incontext_separator,
+                                                                             is_nlp_dataset=args.nlp_dataset,
                                                                              seed=args.run_seed
         )
 
-        # training dataset can be a bottleneck
-        # print("-----------------Shuffling and restricting training dataset (ICL only)-----------------")
-        # random.shuffle(raw_data_dict['train_sequences'])
-        # raw_data_dict["train_sequences"] = raw_data_dict["train_sequences"][:args.considered_eval_samples]
-
+        
         model_config = AutoConfig.from_pretrained(args.model_name).to_dict()
         max_position_embeddings = model_config['max_position_embeddings'] if 'max_position_embeddings' in model_config else(
                         model_config['n_positions'] if 'n_positions' in model_config else None
         )
-        if len(incontext_common_prefix) > max_position_embeddings:
-            print("Error! Incontext input is too long!")
-            quit()
-        args.considered_incontext_examples = (args.considered_incontext_examples, incontext_common_prefix)
+        if not args.nlp_dataset:
+            if len(incontext_common_prefix) > max_position_embeddings:
+                print("Error! Incontext input is too long!")
+                quit()
+        else:
+            tokenizer, _ = get_tokenizer(args)
+            print("Length of incontext_common_prefix:", len(tokenizer.encode(incontext_common_prefix)))
+            if len(tokenizer.encode(incontext_common_prefix)) > max_position_embeddings:
+                print("Error! Incontext input is too long!")
+                quit()
     
+        
+
+    # whether to add instruction to solve the task
+    if args.add_instruction:
+        filename_instruction = f"{data_path}/{args.grammar_name}/instruction_{args.grammar_name}.pkl"
+        if os.path.exists(filename_instruction):
+            with open(filename_instruction, 'rb') as f:
+                instruction = pickle.load(f)
+                for key in raw_data_dict.keys():
+                    if args.incontext_input and key != "incontext_common_prefix":
+                        continue
+                    raw_data_dict[key] = [f"{instruction} {s}" for s in raw_data_dict[key]]
+        else:
+            # this is the case when we consider a formal grammar
+            assert not args.nlp_dataset
+            if args.instruction is None:
+                # use pre-defined instruction
+                instruction_list = [
+                    "",
+                    f"You will be given sequences from a formal language, separated by '{separator_dict[args.incontext_separator]}'. Your task is to generate a new sequence by learning syntactic patterns from the given sequences. ",
+                    f"Generate a new sequence by learning syntactic patterns from the given sequences, separated by '{separator_dict[args.incontext_separator]}'. "
+                ]
+                assert args.instruction_index < len(instruction_list)
+                assert args.incontext_input # it is not clear how to add instruction in FT
+                instruction = instruction_list[args.instruction_index]
+                args.instruction = instruction
+                
+    # apply memorization-based intervention
+    if args.memorization_algo == "deduplication":
+        print("Deduplicating training data")
+        print("Before:", len(raw_data_dict['train_sequences']))
+
+        deduplicated_train_sequences = {}
+        for seq in raw_data_dict['train_sequences']:
+            if seq not in deduplicated_train_sequences:
+                deduplicated_train_sequences[seq] = True
+        raw_data_dict['train_sequences'] = list(deduplicated_train_sequences.keys())
+        
+        print( "After:", len(raw_data_dict['train_sequences']))
+        
     max_seq_len_list = []
     min_seq_len_list = []
     unique_tokens = {}
     data_dict = {}
     for key in raw_data_dict.keys():
         # filter eval_datasets
-        if(not args.include_edit_distance_eval and ("edit_distance" in key or "grammar_edit" in key)):
+        
+        if not args.include_edit_distance_eval and "edit_distance" in key:
+            if not args.include_edit_distance_1_eval or not key.startswith("non_grammatical_test_sequences_edit_distance_1"):
+                continue
+                
+        if not args.include_grammar_edit_eval and "grammar_edit" in key:
             continue
-        if(not args.include_grammar_edit_eval and "grammar_edit" in key):
-            continue
-        if(not args.include_incorrect_random_eval and "non_grammatical" in key):
+        if not args.include_incorrect_random_eval and key == "non_grammatical_sequences":
             continue
         if args.exclude_test_data and "test" in key:
             continue
@@ -347,8 +400,6 @@ def get_data(args, verbose=False):
             print()
 
         print(unique_tokens)
-        # quit()
-
         print(max_seq_len_list, min_seq_len_list, max_sequence_length)
     return data_dict, max_sequence_length, list(unique_tokens.keys())
 
@@ -366,15 +417,11 @@ def create_dataset_dict(data_dict):
     datasets.set_format(type="torch", columns=["text"])
     return datasets
 
-def get_tokenizer(args, load_tokenizer=True, use_local_path=False):
+def get_tokenizer(args, load_tokenizer=True):
     # if load_tokenizer is false, it means we are interested in only knowing the checkpoint_path, which should be the original model path not the fine-tuned one
     if args.checkpoint_path_overwrite is None or not load_tokenizer:
-        if use_local_path:
-            raise ValueError()
-        else:
-            checkpoint_path = args.model_name
+        checkpoint_path = args.model_name
     else:
-        # assert args.model_name in args.checkpoint_path_overwrite
         checkpoint_path = args.checkpoint_path_overwrite
 
     if load_tokenizer:
@@ -418,7 +465,6 @@ def set_path(save_root='result', save_tag=""):
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
-    # config_path = os.path.join(save_path, 'config.json')
     logger_path = os.path.join(save_path, 'exp_log.log')    
 
 
@@ -464,14 +510,18 @@ def tokenize(tokenizer, text, max_length, logger):
         max_length=max_length,
     )
 
-def characterwise_encoding(tokenizer, dataset, max_length, logger, verbose=False):
+def characterwise_encoding(tokenizer, 
+                           dataset, 
+                           max_length, 
+                           logger, 
+                           verbose=False, 
+                           instruction=None):
     sequences = dataset["text"]
-    # max_length = max(len(s) for s in sequences)
     sequence_token_ids = []
     sequence_token_masks = []
     for sequence in sequences:
         sequence_chars = list(sequence)
-        
+
         encoded_chars = tokenize(
             tokenizer,
             sequence_chars,
@@ -480,58 +530,49 @@ def characterwise_encoding(tokenizer, dataset, max_length, logger, verbose=False
         )
         
         
-        # add end of sentence token
-        num_padding = max_length - len(sequence) + 1 # +1 for end of sentence token
-        padded_input_ids = torch.cat(
-            (
-                torch.tensor([tokenizer.pad_token_id] * num_padding, dtype=torch.long),
-                torch.tensor([tokenizer.bos_token_id] * 1, dtype=torch.long),
-                encoded_chars.input_ids[:, -1:].squeeze(1),
-                torch.tensor([tokenizer.eos_token_id] * 1, dtype=torch.long),
+        if instruction is None:
+            num_padding = max_length - len(sequence) + 1 # +1 for end of sentence token
+            padded_input_ids = torch.cat(
+                (
+                    torch.tensor([tokenizer.pad_token_id] * num_padding, dtype=torch.long),
+                    torch.tensor([tokenizer.bos_token_id] * 1, dtype=torch.long),
+                    encoded_chars.input_ids[:, -1:].squeeze(1),
+                    torch.tensor([tokenizer.eos_token_id] * 1, dtype=torch.long),
+                )
             )
-        )
-        padded_attention_mask = torch.cat(
-            (
-                torch.tensor([0] * num_padding, dtype=torch.long),
-                torch.tensor([0] * 1, dtype=torch.long),
-                encoded_chars.attention_mask[:, -1:].squeeze(1),
-                torch.tensor([1] * 1, dtype=torch.long),
+            padded_attention_mask = torch.cat(
+                (
+                    torch.tensor([0] * num_padding, dtype=torch.long),
+                    torch.tensor([0] * 1, dtype=torch.long),
+                    encoded_chars.attention_mask[:, -1:].squeeze(1),
+                    torch.tensor([1] * 1, dtype=torch.long),
+                )
             )
-        )
-        # if(isinstance(tokenizer, GemmaTokenizerFast)):
-        #     # BOS token at the beginning
-        #     padded_input_ids = torch.cat(
-        #         (
-        #             torch.tensor([tokenizer.pad_token_id] * num_padding, dtype=torch.long),
-        #             torch.tensor([tokenizer.bos_token_id] * 1, dtype=torch.long),
-        #             encoded_chars.input_ids[:, 1:].squeeze(1),
-        #             torch.tensor([tokenizer.eos_token_id] * 1, dtype=torch.long),
-        #         )
-        #     )
-        #     padded_attention_mask = torch.cat(
-        #         (
-        #             torch.tensor([0] * num_padding, dtype=torch.long),
-        #             torch.tensor([0] * 1, dtype=torch.long),
-        #             encoded_chars.attention_mask[:, 1:].squeeze(1),
-        #             torch.tensor([1] * 1, dtype=torch.long),
-        #         )
-        #     )
-        # else:
-        #     padded_input_ids = torch.cat(
-        #         (
-        #             torch.tensor([tokenizer.pad_token_id] * num_padding, dtype=torch.long),
-        #             encoded_chars.input_ids.squeeze(1),
-        #             torch.tensor([tokenizer.eos_token_id] * 1, dtype=torch.long),
-        #         )
-        #     )
-        #     padded_attention_mask = torch.cat(
-        #         (
-        #             torch.tensor([0] * num_padding, dtype=torch.long),
-        #             encoded_chars.attention_mask.squeeze(1),
-        #             torch.tensor([1] * 1, dtype=torch.long),
-        #         )
-        #     )
-    
+        else:
+            instruction_tokens = tokenizer.encode(instruction)
+            instruction_attention_mask = [1] * len(instruction_tokens)
+            num_padding = max_length - len(sequence) - len(instruction_tokens) + 1 # +1 for end of sentence token
+            padded_input_ids = torch.cat(
+                (
+                    torch.tensor([tokenizer.pad_token_id] * num_padding, dtype=torch.long),
+                    torch.tensor([tokenizer.bos_token_id] * 1, dtype=torch.long),
+                    torch.tensor(instruction_tokens, dtype=torch.long),
+                    encoded_chars.input_ids[:, -1:].squeeze(1),
+                    torch.tensor([tokenizer.eos_token_id] * 1, dtype=torch.long),
+                )
+            )
+            padded_attention_mask = torch.cat(
+                (
+                    torch.tensor([0] * num_padding, dtype=torch.long),
+                    torch.tensor([0] * 1, dtype=torch.long),
+                    torch.tensor(instruction_attention_mask, dtype=torch.long),
+                    encoded_chars.attention_mask[:, -1:].squeeze(1),
+                    torch.tensor([1] * 1, dtype=torch.long),
+                )
+            )
+            
+        
+
 
         sequence_token_ids.append(padded_input_ids)
         sequence_token_masks.append(padded_attention_mask)
@@ -548,14 +589,28 @@ def characterwise_encoding(tokenizer, dataset, max_length, logger, verbose=False
 
 
 
-# def encode_dataset(tokenizer, dataset, batch_size, max_sequence_length, logger, verbose=True):
-def encode_dataset(tokenizer, dataset, max_sequence_length, logger, verbose=True):
-    return dataset.map(
-        lambda dataset_split: characterwise_encoding(tokenizer, dataset_split, max_sequence_length, logger, verbose),
-        batched=True,
-        batch_size=128,
-    )
-    
+def encode_dataset(tokenizer, 
+                   dataset, 
+                   max_sequence_length, 
+                   logger, 
+                   verbose=True,
+                   instruction_data=None):
+
+    for split_name, split_dataset in dataset.items():
+        dataset[split_name] = split_dataset.map(
+            lambda batch: characterwise_encoding(
+                tokenizer=tokenizer, 
+                dataset=batch, 
+                max_length=max_sequence_length, 
+                logger=logger, 
+                verbose=verbose,
+                instruction=instruction_data['instruction'] if instruction_data['add_instruction'] and split_name == "incontext_common_prefix" else None
+            ),
+            batched=True,
+            batch_size=128,
+        )
+    return dataset
+
 
 
 def custom_tokenize_string(tokens, attention, position):
@@ -954,23 +1009,16 @@ def compute_metrics(grammarCallback, selected_token_ids):
         target_token_prob = processed_logits[:, :, 2] # target_token_prob shape: (batch_size, seq_len)
         selected_token_probs = processed_logits[:, :, 3:] # selected_token_probs shape: (batch_size, seq_len, len(selected_token_ids))
         
-        # print(f"Preds shape: {preds.shape}")
-        # print(f"Predicted token prob shape: {predicted_token_prob.shape}")
-        # print(f"Correct token prob shape: {target_token_prob.shape}")
-        # print(f"Selected token probs shape: {selected_token_probs.shape}")
-        # print(f"Labels shape: {labels.shape}")
-
+        
 
         # Shift position of labels. pred position is already shifted in preprocess_logits_for_metrics
         shift_labels = labels[..., 1:]
-        # print(f"Shift labels shape: {shift_labels.shape}")
-
+        
         mask = shift_labels != -100
 
         # accuracy
         preds_flatten = preds.flatten()
         shift_labels_flatten = shift_labels.flatten()
-        # result = clf_metrics.compute(predictions=preds_flatten, references=shift_labels_flatten)
         result = clf_metrics.compute(predictions=preds_flatten[mask.flatten()], references=shift_labels_flatten[mask.flatten()])
         
         # average predicted token prob per token per sequence
@@ -1000,43 +1048,94 @@ def compute_metrics(grammarCallback, selected_token_ids):
 
     return compute_metrics_for_grammar
 
+from nltk.metrics.distance import edit_distance
+def process_edit_distance(df):
+    # token sequence to sample id
+    token_sequence_to_sample_id_map = {}
+    for _, row in df.iterrows():
+        if row['token_sequence'] not in token_sequence_to_sample_id_map:
+            token_sequence_to_sample_id_map[row['token_sequence']] = [row['sample_id']]
+        else:
+            token_sequence_to_sample_id_map[row['token_sequence']].append(row['sample_id'])
+    
+    # pair distance
+    token_sequences = df['token_sequence'].unique()
+    pair_to_edit_distance = {}
+    max_distance = 0
+    for token_seq_a in token_sequences:
+        for token_seq_b in token_sequences:
+            if (token_seq_a, token_seq_b) in pair_to_edit_distance:
+                continue
+            if (token_seq_b, token_seq_a) in pair_to_edit_distance:
+                continue
+            distance = edit_distance(token_seq_a, token_seq_b)
+            pair_to_edit_distance[(token_seq_a, token_seq_b)] = distance
+            pair_to_edit_distance[(token_seq_b, token_seq_a)] = distance
+            max_distance = max(max_distance, distance)
+
+    
+    sample_id_to_distance = {}
+    for token_seq_a, token_seq_b in pair_to_edit_distance:
+        distance = pair_to_edit_distance[(token_seq_a, token_seq_b)]
+
+        # token_seq_a
+        for sample_id in token_sequence_to_sample_id_map[token_seq_a]:
+            if sample_id not in sample_id_to_distance:
+                sample_id_to_distance[sample_id] = {}
+                for d in range(max_distance + 1):
+                    sample_id_to_distance[sample_id][d] = []
+            sample_id_to_distance[sample_id][distance].extend(token_sequence_to_sample_id_map[token_seq_b])
+
+
+        # token_seq_b
+        for sample_id in token_sequence_to_sample_id_map[token_seq_b]:
+            if sample_id not in sample_id_to_distance:
+                sample_id_to_distance[sample_id] = {}
+                for d in range(max_distance + 1):
+                    sample_id_to_distance[sample_id][d] = []
+            sample_id_to_distance[sample_id][distance].extend(token_sequence_to_sample_id_map[token_seq_a])
+
+    # unique
+    for sample_id in sample_id_to_distance:
+        total = 0
+        for distance in sample_id_to_distance[sample_id]:
+            sample_id_to_distance[sample_id][distance] = list(set(sample_id_to_distance[sample_id][distance]))
+            total += len(sample_id_to_distance[sample_id][distance])
+        assert total == df['sample_id'].nunique()
+            
+    return sample_id_to_distance
+
+
 class GrammarCallback(TrainerCallback):
 
 
-    def __init__(self, base_config, trainer, tokenizer, dataset, incontext_common_prefix_len):
+    def __init__(self, base_config, trainer, tokenizer, dataset, incontext_common_prefix_len, train_test_distance):
         self.base_config = base_config
         self.trainer = trainer
         self.tokenizer = tokenizer
         self.dataset = dataset
-        self.inference_only_mode = base_config['inference_only_mode']
         self.incontext_input = base_config['incontext_input']
         self.incontext_common_prefix_len = incontext_common_prefix_len
         self.decoding_cache = {}
         self.store_result_dict = None
+        self.train_test_distance = train_test_distance
         self.intermediate_result = pd.DataFrame()
-        if self.base_config['memorization_intervention'] is not None:
-            self.__config_check()
+        self.intermediate_result_earlier_epoch = None
+        self.distance_result_train = None
+        self.removed_sample_ids_history = {}
+        
+        self.optimal_contextual_threshold = {}
+        if self.train_test_distance is not None:
+            for sample_id in self.train_test_distance:
+                self.optimal_contextual_threshold[sample_id] = np.inf
+        else:
+            for sample_id in range(self.dataset['train_sequences'].num_rows):
+                self.optimal_contextual_threshold[sample_id] = 0.2
+        
+        print(self.optimal_contextual_threshold)
+            
         
 
-    def __config_check(self):
-        with open(f"{self.base_config['memorization_intervention']}/args.pkl", "rb") as f:
-            memorization_config = pickle.load(f)
-
-            ignore_keys = ['comment', 'generate_text', 'compute_msp', 'global_prefix_config', 'use_deepspeed', 'memorization_intervention', 'memorization_approach']
-            for key in memorization_config:
-                if key in ignore_keys:
-                    continue
-                assert memorization_config[key] == self.base_config[key], key
-
-            self.df_string_memorization = pd.read_csv(f"{self.base_config['memorization_intervention']}/string_memorization.csv")
-            assert self.base_config['memorization_approach'] in self.df_string_memorization['approach'].unique(), f"Memorization approach {self.base_config['memorization_approach']} not found in string memorization csv"
-            self.df_string_memorization = self.df_string_memorization[
-                (self.df_string_memorization['approach'] == self.base_config['memorization_approach']) & 
-                (self.df_string_memorization['epoch'] == self.df_string_memorization['epoch'].max()) &
-                (self.df_string_memorization['metric'] == 'target_token_negative_log_prob')
-            ]
-            print(self.df_string_memorization[['sample_id', 'parameter', 'epoch']])
-            
         
     def on_evaluate(self, args, state, control, **kwargs):
         # action performed after compute_metrics
@@ -1080,9 +1179,9 @@ class GrammarCallback(TrainerCallback):
             result = result[result['length_input_tokens'] >= self.incontext_common_prefix_len]
         result['correct'] = result['pred_id'] == result['label_id']
         
-
+        
         # storing results of training sequences
-        self.intermediate_result = pd.concat([self.intermediate_result, result[result['eval_dataset'] == 'train_sequences']]).copy()
+        self.intermediate_result = pd.concat([self.intermediate_result, result[result['eval_dataset'].isin(['train_sequences', 'test_sequences'])]]).copy()
     
         # store once, for local rank 0
         if(args.local_rank != 0):
@@ -1108,53 +1207,265 @@ class GrammarCallback(TrainerCallback):
         else:
             result_average.to_csv(f"{args.output_dir}/grammar_eval_result_average.csv", mode='a', header=False, index=False)
 
+    def get_nearest_training_strings(self, sample_id, max_distance):
+        sample_ids_nearest = []
+        for d in range(max_distance+1):
+            sample_ids_nearest.extend(self.distance_result_train[sample_id][d])
+        # print(f"Nearest training strings for sample {sample_id}: {sample_ids_nearest}")
+        return sample_ids_nearest
 
-    def on_epoch_end(self, args, state, control, **kwargs):
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
         if self.intermediate_result.shape[0] == 0 or self.incontext_input:
             return
         
-        if self.base_config['memorization_intervention'] is None:
+        if self.base_config['memorization_algo'] in ["no_intervention", "deduplication"]:
             return
 
-
         assert self.intermediate_result['epoch'].nunique() == 1
-        assert self.intermediate_result['eval_dataset'].nunique() == 1
+        assert self.intermediate_result['eval_dataset'].nunique() <= 2
+        assert "train_sequences" in self.intermediate_result['eval_dataset'].unique()
+        assert "test_sequences" in self.intermediate_result['eval_dataset'].unique()
         
         if args.local_rank == 0:
-            print("Epoch:", state.epoch)
-            print(self.trainer.train_dataset)
+            print("\n\nEpoch:", state.epoch)
+            # print(self.trainer.train_dataset)
 
-        self.intermediate_result = self.intermediate_result[~self.intermediate_result['label_id'].isin([-100, self.tokenizer.pad_token_id, self.tokenizer.bos_token_id, self.tokenizer.eos_token_id])]
-        self.intermediate_result['sample_id'] = (self.intermediate_result['length_input_tokens'] == 0).cumsum() - 1
         
-        self.intermediate_result = self.intermediate_result.groupby(['sample_id']).aggregate({
+        # assign sample id and retrive token sequence
+        self.intermediate_result = self.intermediate_result[~self.intermediate_result['label_id'].isin([-100, self.tokenizer.pad_token_id, self.tokenizer.bos_token_id, self.tokenizer.eos_token_id])]
+        list_intermediate_result = []
+        for _, df_item in self.intermediate_result.groupby(['eval_dataset']):
+            df_item['sample_id'] = (df_item['length_input_tokens'] == 0).cumsum() - 1
+            # retrieve token sequence
+            list_df_item = []
+            for _, df_sample in df_item.groupby('sample_id'):
+                df_sample = df_sample.sort_values('length_input_tokens')
+                token_sequence = tuple(df_sample['label_id'].values)
+                df_sample['token_sequence'] = [token_sequence] * len(df_sample)
+                list_df_item.append(df_sample)
+            df_item = pd.concat(list_df_item)
+            list_intermediate_result.append(df_item)
+        self.intermediate_result = pd.concat(list_intermediate_result)
+        self.intermediate_result = self.intermediate_result.groupby(['epoch', 'eval_dataset', 'sample_id', 'token_sequence']).aggregate({
             'target_token_negative_log_prob': 'mean',
         }).reset_index()
-        
-        
-        # merge
-        assert self.intermediate_result.shape[0] == self.df_string_memorization.shape[0]
-        self.intermediate_result = self.intermediate_result.merge(self.df_string_memorization[['sample_id', 'parameter', 'distance_from_test']], how='left', on=['sample_id'])
 
+        # preprocess training sequences by finding edit distance with all other training sequences
+        if  self.base_config['memorization_algo'].endswith("_edit_distance"):
+            self.distance_result_train = process_edit_distance(self.intermediate_result[
+                self.intermediate_result['eval_dataset'] == 'train_sequences'
+            ])
+
+
+        # if value is true, then ignore
+        ignore_sample_ids = {i: False for i in self.intermediate_result[self.intermediate_result['eval_dataset'] == 'train_sequences']['sample_id'].unique()}
+        
         if args.local_rank == 0:
-            print(self.intermediate_result)
+            intermediate_result_train = self.intermediate_result[self.intermediate_result['eval_dataset'] == 'train_sequences'].copy()
+            intermediate_result_test = self.intermediate_result[self.intermediate_result['eval_dataset'] == 'test_sequences'].copy()
+            print("Var to mean ratio train:", intermediate_result_train['target_token_negative_log_prob'].std(ddof=0) / intermediate_result_train['target_token_negative_log_prob'].mean())
+            print("Var to mean ratio test :", intermediate_result_test['target_token_negative_log_prob'].std(ddof=0) / intermediate_result_test['target_token_negative_log_prob'].mean())
+
         
-        # memorized strings
-        ignore_sample_ids = self.intermediate_result[self.intermediate_result['target_token_negative_log_prob'] <= self.intermediate_result['parameter']]['sample_id'].values
-        assert len(ignore_sample_ids) == len(set(ignore_sample_ids))
-        self.intermediate_result = pd.DataFrame()
+        if self.base_config['memorization_algo'] == "sanity_check":
+            # Policy 0: sanity check
+            for i in self.intermediate_result[self.intermediate_result['eval_dataset'] == 'train_sequences']['sample_id'].unique():
+                if i == 4:
+                    ignore_sample_ids[i] = False # keep
+                else:
+                    ignore_sample_ids[i] = True # ignore
+
         
-        if len(ignore_sample_ids) != self.dataset['train_sequences'].num_rows:
-            selected_data = [self.dataset['train_sequences'][i] for i in range(len(self.dataset['train_sequences'])) if i not in ignore_sample_ids]
-            modified_dataset = Dataset.from_dict({k: [dic[k] for dic in selected_data] for k in selected_data[0].keys()})
-            self.trainer.train_dataset = modified_dataset
+        elif self.base_config['memorization_algo'] == "tail_distribution":
+            # Policy 1: tail distribution
+            token_sequence_to_sample_id_map = {} # token_sequence -> sample_id_list
+            for _, row in self.intermediate_result[self.intermediate_result['eval_dataset'] == 'train_sequences'].iterrows():
+                if row['token_sequence'] not in token_sequence_to_sample_id_map:
+                    token_sequence_to_sample_id_map[row['token_sequence']] = []
+                token_sequence_to_sample_id_map[row['token_sequence']].append(row['sample_id'])
+            
+            for token_sequence in token_sequence_to_sample_id_map:
+                mapped_ids = token_sequence_to_sample_id_map[token_sequence]
+                if len(mapped_ids) > 1: # more than one sample with same token sequence
+                    for i in mapped_ids:
+                        ignore_sample_ids[i] = True
+        
+        elif self.base_config['memorization_algo'] == "training_variance":
+            # Policy 3: Remove training strings (25%) having lower loss than the rest
+            intermediate_result_train = self.intermediate_result[self.intermediate_result['eval_dataset'] == 'train_sequences'].copy()
+            token_sequence_to_sample_id_map = {}
+            for _, row in intermediate_result_train.iterrows():
+                if row['token_sequence'] not in token_sequence_to_sample_id_map:
+                    token_sequence_to_sample_id_map[row['token_sequence']] = []
+                token_sequence_to_sample_id_map[row['token_sequence']].append(row['sample_id'])
+            
+            # token_sequence can be duplicate. Keep the first occurrence
+            intermediate_result_train = intermediate_result_train.drop_duplicates(subset=['token_sequence'])
+
+            # variance relative to mean            
+            cv = intermediate_result_train['target_token_negative_log_prob'].std(ddof=0) / intermediate_result_train['target_token_negative_log_prob'].mean()
+            # print("variance relative to mean:", cv)
+
+            cv_threshold = 0.05
+            if cv > cv_threshold:
+                intermediate_result_train = drop_low_loss_train_sequences(intermediate_result_train, 'target_token_negative_log_prob')
+                ignore_token_sequences = intermediate_result_train[intermediate_result_train['is_low_outlier']]['token_sequence'].unique()
+                for token_sequence in ignore_token_sequences:
+                    mapped_ids = token_sequence_to_sample_id_map[token_sequence]
+                    for i in mapped_ids:
+                        ignore_sample_ids[i] = True
+
+        elif self.base_config['memorization_algo'] == 'training_test_equal_variance':
+            if self.intermediate_result_earlier_epoch is not None: # have previous results
+                intermediate_result_train = self.intermediate_result[self.intermediate_result['eval_dataset'] == 'train_sequences'].copy()
+                token_sequence_to_sample_id_map = {}
+                for _, row in intermediate_result_train.iterrows():
+                    if row['token_sequence'] not in token_sequence_to_sample_id_map:
+                        token_sequence_to_sample_id_map[row['token_sequence']] = []
+                    token_sequence_to_sample_id_map[row['token_sequence']].append(row['sample_id'])
+                
+                
+                # find test sequences for which loss increases in this epoch, compared to previous epoch
+                test_sequences_loss_change = pd.merge(
+                    self.intermediate_result_earlier_epoch[self.intermediate_result_earlier_epoch['eval_dataset'] == 'test_sequences'],
+                    self.intermediate_result[self.intermediate_result['eval_dataset'] == 'test_sequences'],
+                    how='left',
+                    on=['sample_id', 'token_sequence'],
+                    suffixes=('', '_new')
+                )
+                # remove duplicates
+                test_sequences_loss_change = test_sequences_loss_change.drop_duplicates(subset=['token_sequence'])
+                intermediate_result_train = intermediate_result_train.drop_duplicates(subset=['token_sequence'])
+
+
+                num_affected_test_sequences = test_sequences_loss_change[test_sequences_loss_change['target_token_negative_log_prob_new'] > test_sequences_loss_change['target_token_negative_log_prob']].shape[0]
+                # print("Number of test sequences affected:", num_affected_test_sequences)
+
+                if args.local_rank == 0:
+                    print("Fraction of test sequences affected:", num_affected_test_sequences / test_sequences_loss_change.shape[0])
+
+                intermediate_result_train = drop_low_loss_train_sequences(intermediate_result_train, 
+                                                                          'target_token_negative_log_prob',
+                                                                          percentile=num_affected_test_sequences / test_sequences_loss_change.shape[0] * 100)
+                ignore_token_sequences = intermediate_result_train['token_sequence'].unique()
+                for token_sequence in ignore_token_sequences:
+                    mapped_ids = token_sequence_to_sample_id_map[token_sequence]
+                    for i in mapped_ids:
+                        ignore_sample_ids[i] = True
+
+                
+            
+        elif "remove" in self.base_config['memorization_algo']:
+            # Policy 4: Remove training strings by comparing with their contextual threshold
+            in_learning_phase = {}
+            for sample_id in self.optimal_contextual_threshold:
+                median_threshold = self.intermediate_result[
+                    (self.intermediate_result['eval_dataset'] == 'test_sequences') &
+                    (self.intermediate_result['sample_id'].isin(self.train_test_distance[sample_id]))
+                ]['target_token_negative_log_prob'].median()
+
+                if 'remove_before_memorized' in self.base_config['memorization_algo'] and self.intermediate_result_earlier_epoch is not None:
+                    # we upweight the threshold based on what would the training loss of the same be in the next epoch.
+                    loss_decrease = self.intermediate_result_earlier_epoch[
+                        (self.intermediate_result_earlier_epoch['eval_dataset'] == 'train_sequences') &
+                        (self.intermediate_result_earlier_epoch['sample_id'] == sample_id)
+                    ]['target_token_negative_log_prob'].item() - self.intermediate_result[
+                        (self.intermediate_result['eval_dataset'] == 'train_sequences') &
+                        (self.intermediate_result['sample_id'] == sample_id)
+                    ]['target_token_negative_log_prob'].item()
+                    # print(median_threshold, loss_decrease)
+                    loss_decrease = max(0, loss_decrease) # if loss does not decrease, we do not upweight
+                    median_threshold += loss_decrease
+                    
+
+                if self.optimal_contextual_threshold[sample_id] >= median_threshold:
+                    self.optimal_contextual_threshold[sample_id] = median_threshold
+                    # in_learning_phase[sample_id] = True # if for any sample, its contextual threshold is updated in the current epoch, it is still in learning phase
+        
+
+            # identify memorized strings
+            for _, row in self.intermediate_result[(self.intermediate_result['eval_dataset'] == 'train_sequences')].iterrows():
+                if row['target_token_negative_log_prob'] <= self.optimal_contextual_threshold[row['sample_id']]:
+                    if row['sample_id'] not in in_learning_phase:
+                        if self.base_config['memorization_algo'].endswith("_edit_distance"):
+                            for sample_id_near in self.get_nearest_training_strings(row['sample_id'], max_distance=3):
+                                ignore_sample_ids[sample_id_near] = True
+                        else:
+                            ignore_sample_ids[row['sample_id']] = True
+
+            
+
+            if "never_put_back" in self.base_config['memorization_algo']:
+                # maintain history. 
+                for sample_id in ignore_sample_ids:
+                    if ignore_sample_ids[sample_id]:
+                        self.removed_sample_ids_history[sample_id] = True
+                # if removed in previous epoch, still ignore
+                for sample_id in self.removed_sample_ids_history:
+                    ignore_sample_ids[sample_id] = True
+                                
+        elif self.base_config['memorization_algo'] == "manual":
+            pass
+
+        else:
+            raise ValueError(self.base_config['memorization_algo'])
+
+
+        
+
+            
+        if args.local_rank == 0:
+            print("Ignoring ids", [i for i in ignore_sample_ids if ignore_sample_ids[i]])
+            
+        
+        total_ignore_sample_ids = sum(ignore_sample_ids.values())
+        assert len(ignore_sample_ids) == self.dataset['train_sequences'].num_rows
+        
+        # update indices
+        if total_ignore_sample_ids != self.dataset['train_sequences'].num_rows:
+            self.trainer.train_dataset.indices = [i for i in ignore_sample_ids.keys() if not ignore_sample_ids[i]]
             if args.local_rank == 0:
-                print(f"Pruned {len(ignore_sample_ids)} memorization samples.")
+                print(f"Pruned {total_ignore_sample_ids} memorization samples.")
+                print("\n"*3)
         else:
             if args.local_rank == 0:
                 print(f"All memorization samples pruned.")
+                print("\n"*3)
             control.should_training_stop = True
+
+        # storing pruning results
+        self.intermediate_result_earlier_epoch = self.intermediate_result.copy()
+        self.intermediate_result = pd.DataFrame()
+        if args.local_rank == 0:
+            pruning_result = []
+            for i in ignore_sample_ids:
+                pruning_result.append({
+                    'epoch': self.intermediate_result_earlier_epoch['epoch'].iloc[0],
+                    'sample_id': i,
+                    'is_pruned': ignore_sample_ids[i],
+                })
+                
+            if(not os.path.exists(f"{args.output_dir}/memorization_pruning.csv")):
+                pd.DataFrame(pruning_result).to_csv(f"{args.output_dir}/memorization_pruning.csv", index=False)
+            else:
+                pd.DataFrame(pruning_result).to_csv(f"{args.output_dir}/memorization_pruning.csv", mode='a', header=False, index=False)
+        
         return
+
+
+def drop_low_loss_train_sequences(df, col, percentile=25):
+    # print("percentile", percentile)
+    x = df[col].to_numpy()
+    keep_mask = x > np.percentile(x, percentile)
+    # print(keep_mask.sum(), len(keep_mask))
+    return df[~keep_mask]
+
+
+
+    
+
+
 
 
 def preprocess_logits(tokenizer, selected_token_ids):
@@ -1173,14 +1484,12 @@ def preprocess_logits(tokenizer, selected_token_ids):
         
         # softmax prob of predicted tokens
         pred_token_probs = softmax_prob.gather(-1, pred_ids.unsqueeze(-1)) # pred_token_probs shape: (batch_size, seq_len, 1)
-        # print(f"Pred token probs shape: {pred_token_probs.shape}")
-
+        
         
         # softmax prob of correct tokens
         labels = torch.where(labels == -100, tokenizer.pad_token_id, labels) # repace -100 with tokenizer.pad_token_id
         target_token_probs = softmax_prob.gather(-1, labels.unsqueeze(-1)) # target_token_probs shape: (batch_size, seq_len, 1)
-        # print(f"Correct token probs shape: {target_token_probs.shape}")
-
+        
         # softmax prob of selected tokens
         selected_token_probs = softmax_prob[:, :, torch.tensor(selected_token_ids).to(logits.device)] # selected_token_probs shape: (batch_size, seq_len, len(selected_token_ids))
         
@@ -1191,7 +1500,6 @@ def preprocess_logits(tokenizer, selected_token_ids):
                                 target_token_probs,
                                 selected_token_probs], dim=-1) # pred_ids shape: (batch_size, seq_len, 1+len(selected_token_ids))
 
-        # print(f"Return id shape: {return_ids.shape}")
         return return_ids
     
     return preprocess_logits_for_metrics
@@ -1234,7 +1542,6 @@ def compute_inference_results(model,
             if token_id not in [tokenizer.pad_token_id, tokenizer.eos_token_id, tokenizer.bos_token_id]:
                 break
             non_interested_token_count += 1
-        # return non_interested_token_count + incontext_common_prefix_len
         return non_interested_token_count
 
     def cached_generation_common_prefix(input_ids_prompt, input_attn_mask_prompt):
@@ -1277,12 +1584,14 @@ def compute_inference_results(model,
 
         # Expand past_key_values: tuple of (key, value) → each [1, heads, seq_len, head_dim]
         if hasattr(single_output, "past_key_values") and single_output.past_key_values is not None:
+            pkv = single_output.past_key_values
+             
             expanded_output.past_key_values = tuple(
                 (
                     key.expand(batch_size, -1, -1, -1).clone(),
                     value.expand(batch_size, -1, -1, -1).clone()
                 )
-                for key, value in single_output.past_key_values
+                for key, value in pkv
             )
 
         return expanded_output
@@ -1301,12 +1610,10 @@ def compute_inference_results(model,
             "attention_mask": []
         }
         for input_ids, attention_mask in batch:
-            # print(len(input_ids), len(attention_mask))
             num_pad = max_length - len(input_ids)
             batch_processed["input_ids"].append(input_ids + [tokenizer.eos_token_id] * num_pad)
             batch_processed["attention_mask"].append(attention_mask + [0] * num_pad)
-            # print(len(batch_processed["input_ids"][-1]), len(batch_processed["attention_mask"][-1]))
-
+            
         return batch_processed
 
 
@@ -1396,8 +1703,6 @@ def compute_inference_results(model,
         input_ids_incontext = [tokenizer.bos_token_id]
         attention_mask_incontext = [0]    
  
-    # print(input_ids_incontext)
-    # print(attention_mask_incontext)
     
     initialization = {}
     initialization['cached_output'] = cached_generation_common_prefix(input_ids_incontext, attention_mask_incontext)
@@ -1727,54 +2032,21 @@ def text_generation(
     else:
         result.to_csv(f"{output_dir}/text_generation_result.csv", mode='a', header=False, index=False)
 
-    # return result
+    
 
 
-
-
-class PruneDatasetCallback(TrainerCallback):
-    def __init__(self, trainer, dataset, base_config):
-        self.trainer = trainer
-        self.dataset = dataset
-        self.base_config = base_config
-        self.__config_check()
-        
-
-    def __config_check(self):
-        with open(f"{self.base_config['memorization_intervention']}/args.pkl", "rb") as f:
-            memorization_config = pickle.load(f)
-
-            ignore_keys = ['comment', 'generate_text', 'compute_msp', 'global_prefix_config', 'use_deepspeed']
-            for key in memorization_config:
-                if key in ignore_keys:
-                    continue
-                assert memorization_config[key] == self.base_config[key], key
-
-            self.df_string_memorization = pd.read_csv(f"{self.base_config['memorization_intervention']}/string_memorization.csv")
-        pass
-
-
-    def on_epoch_end(self, args, state, control, **kwargs):
-        # print("Epoch", state.epoch)
-        # print(self.trainer.train_dataset)
-
-        ignore_sample_ids = self.df_string_memorization[
-            (self.df_string_memorization['epoch'] == state.epoch) &
-            (self.df_string_memorization['approach'] == 'contextual_memorization') &
-            (self.df_string_memorization['memorization_binary'] == True) &
-            (self.df_string_memorization['eval_dataset'] == 'train_sequences') &
-            (self.df_string_memorization['metric'] == 'target_token_negative_log_prob')
-        ]['sample_id'].values
-        assert len(ignore_sample_ids) == len(set(ignore_sample_ids))
-        
-        if len(ignore_sample_ids) == self.dataset.num_rows:
-            control.should_training_stop = True
-            return
-        
-        new_data = [self.dataset[i] for i in range(len(self.dataset)) if i not in ignore_sample_ids]
-        modified_dataset = Dataset.from_dict({k: [dic[k] for dic in new_data] for k in new_data[0].keys()})
-        self.trainer.train_dataset = modified_dataset
-
-        print(f"Pruned {len(ignore_sample_ids)} memorization samples.")
-
-        return
+def min_distant_sequences(train_sequences, test_sequences, distance_dict):
+    result = {}
+    for i, train_sequence in enumerate(train_sequences):
+        distance_list = []
+        for test_sequence in test_sequences:
+            distance_list.append(abs(distance_dict[test_sequence] - distance_dict[train_sequence]))
+        result[i] = []
+        min_distance = min(distance_list)
+        for j in range(len(test_sequences)):
+            if distance_list[j] == min_distance:
+                result[i].append(j)
+        if len(result[i]) == 0:
+            print(distance_list)
+            print(min(distance_list))
+    return result

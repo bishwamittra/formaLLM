@@ -12,5 +12,3 @@ wandb==0.18.3
 scikit-learn
 sentencepiece
 plotly
-nbformat
-kaleido

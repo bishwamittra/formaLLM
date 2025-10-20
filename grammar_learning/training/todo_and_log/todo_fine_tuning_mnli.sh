@@ -13,7 +13,7 @@
 # sws-8a100-03,sws-8a100-01,sws-8h100grid-01,sws-8h100grid-02,sws-8h100grid-03
 
 
-#SBATCH -o %x_%j.out      # File to which STDOUT will be written
+#SBATCH -o %x_%j.log      # File to which STDOUT will be written
 #SBATCH -e %x_%j.err      # File to which STDERR will be written
 
 
@@ -21,7 +21,7 @@ export GPUS_PER_NODE=1
 export HF_HUB_CACHE=/NS/formal-grammar-and-memorization/nobackup/shared/huggingface_cache/hub
 export HF_DATASETS_CACHE=/NS/formal-grammar-and-memorization/nobackup/shared/huggingface_cache/datasets
 
-workdir="../training"
+workdir="/NS/formal-grammar-and-memorization/work/bghosh/formal_grammars/grammar_learning/training"
 cd $workdir
 nvidia-smi
 
@@ -44,7 +44,7 @@ do
             do
                 time torchrun \
                 --nproc_per_node=$GPUS_PER_NODE \
-                training_pcfg_nlp.py \
+                training.py \
                 --model_name ${model_name} \
                 --grammar_name ${grammar_name} \
                 --num_samples 10000 \

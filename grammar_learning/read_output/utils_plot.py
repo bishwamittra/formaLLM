@@ -11,13 +11,19 @@ from itertools import cycle
 
 symbol_sequence = ['circle', 'square', 'diamond', 'cross', 'x', 'triangle-up', 'triangle-down', 'triangle-left', 'triangle-right', 'triangle-ne', 'triangle-se', 'triangle-sw', 'triangle-nw', 'pentagon', 'hexagon', 'hexagon2', 'octagon', 'star', 'hexagram', 'star-triangle-up', 'star-triangle-down', 'star-square', 'star-diamond', 'diamond-tall', 'diamond-wide', 'hourglass', 'bowtie', 'circle-cross', 'circle-x', 'square-cross', 'square-x', 'diamond-cross', 'diamond-x', 'cross-thin', 'x-thin', 'asterisk', 'hash', 'y-up', 'y-down', 'y-left', 'y-right', 'line-ew', 'line-ns', 'line-ne', 'line-nw', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'arrow-bar-up', 'arrow-bar-down', 'arrow-bar-left', 'arrow-bar-right']
 
-def print_summary(df, list_group, list_aggregate, show_std=True, latex_format=False, round_to_digits=True):
+def print_summary(df, list_group, list_aggregate, sort=None, show_std=True, latex_format=False, round_to_digits=True):
     df_summary = mean_std_df(df, list_group, list_aggregate)
-    for column in list_aggregate:
+    if sort is not None:
+        assert isinstance(sort, list)
+        assert len(sort) == len(list_aggregate)
+
+    for i, column in enumerate(list_aggregate):
         if round_to_digits:
             df_summary[column+'_mean'] = df_summary[column+'_mean'].apply(lambda x: f"{x:.2f}")
             df_summary[column+'_std'] = df_summary[column+'_std'].apply(lambda x: f"{x:.2f}")
-
+        
+        if sort is not None:
+            df_summary = df_summary.sort_values(by=column+'_mean', ascending=sort[i])
 
         # check nan
         if(show_std):
@@ -35,6 +41,7 @@ def print_summary(df, list_group, list_aggregate, show_std=True, latex_format=Fa
                 df_summary[column] = df_summary.apply(lambda x: f"-" if not pd.notna(x[column+'_mean'])
                                     else f"{x[column+'_mean']}", axis=1)
 
+    df_summary = df_summary.reset_index(drop=True)
     return df_summary[list_group + list_aggregate]
 
 
@@ -280,13 +287,6 @@ def nice_plot(
             group_by: enforce_legend_order
     } if isinstance(enforce_legend_order, list) else None
 
-    # print(category_orders)
-    # fig = px.bar(df, color_discrete_map= {'GOOG': 'black',
-    #                                   'AAPL': 'grey',
-    #                                   'AMZN': 'blue',
-    #                                   'FB': 'green',
-    #                                   'NFLX': 'red',
-    #                                   'MSFT':'firebrick'}
 
 
     color_discrete_map = {}
@@ -497,7 +497,8 @@ def nice_scatter_plot(
         color_group=None,
         group_hide_legend=None,
         # group_dashed_line=None,
-        # dash_type="dot"
+        # dash_type="dot",
+        trendline=None
     ):
     df = df.copy()
     assert y_axis in df.columns
@@ -570,7 +571,8 @@ def nice_scatter_plot(
         symbol=group_by if add_marker else None,
         symbol_sequence=symbol_sequence if add_marker else None,
         color_discrete_map=color_discrete_map,
-        render_mode=render_mode
+        render_mode=render_mode,
+        trendline=trendline,
     )
    
     

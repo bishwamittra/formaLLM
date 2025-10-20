@@ -10,13 +10,13 @@
 # SBATCH --exclude=sws-8h100grid-04,sws-8h100grid-05,sws-8a100-04,sws-8a100-03
 
 
-#SBATCH -o %x_%j.out      # File to which STDOUT will be written
+#SBATCH -o %x_%j.log      # File to which STDOUT will be written
 #SBATCH -e %x_%j.err      # File to which STDERR will be written
 export GPUS_PER_NODE=4
 export HF_HUB_CACHE=/NS/formal-grammar-and-memorization/nobackup/shared/huggingface_cache/hub
 export HF_DATASETS_CACHE=/NS/formal-grammar-and-memorization/nobackup/shared/huggingface_cache/datasets
 
-workdir="../training"
+workdir="/NS/formal-grammar-and-memorization/work/bghosh/formal_grammars/grammar_learning/training"
 cd $workdir
 nvidia-smi
 
@@ -31,25 +31,29 @@ do
 
 
 
-    for considered_incontext_examples in "0" "1" "2" "4" "8" "16" "32" "64" "128" "256" "512" "1024"
+    # for considered_incontext_examples in "0" "1" "2" "4" "8" "16" "32" "64" "128" "256" "512" "1024"
+    for considered_incontext_examples in "1024"
     do
 
         for model_name in "Qwen/Qwen2.5-7B" \
                         #   "Qwen/Qwen2.5-0.5B" \
                         #   "Qwen/Qwen2.5-1.5B" \
-                        
+                        #   "Qwen/Qwen2.5-14B" \
+
 
 
         do
 
             
-            for grammar_name in "pcfg_cfg3b_disjoint_terminals" "pcfg_4_3_1_2_3_4_5_6_7_8_9" "pcfg_cfg3b_disjoint_terminals_latin" "pcfg_4_3_1_2_3_4_5_6_7_8_9_latin"
+            # for grammar_name in "pcfg_cfg3b_disjoint_terminals" "pcfg_4_3_1_2_3_4_5_6_7_8_9" "pcfg_cfg3b_disjoint_terminals_latin" "pcfg_4_3_1_2_3_4_5_6_7_8_9_latin"
+            # for grammar_name in "pcfg_cfg3b_disjoint_terminals"
+            for grammar_name in "pcfg_cfg3b_disjoint_terminals_latin" "pcfg_4_3_1_2_3_4_5_6_7_8_9" "pcfg_4_3_1_2_3_4_5_6_7_8_9_latin"
                               
 
                               
             do
                 time TRANSFORMERS_VERBOSITY=error python \
-                training_pcfg.py \
+                training.py \
                 --inference_only_mode \
                 --model_name ${model_name} \
                 --grammar_name ${grammar_name} \
