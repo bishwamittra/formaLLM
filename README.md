@@ -2,8 +2,14 @@
 Corresponding paper:
 - Bishwamittra Ghosh, Soumi Das, Till Speicher, Qinyuan Wu, Mohammad Aflah Khan, Deepak Garg, Krishna P Gummadi, and Evimaria
 Terzi. **Fine-tuning vs. in-context learning in large language models: A formal language learning perspective**. In Submission, 2025. URL: https://openreview.net/pdf?id=NZiaZoTaNq
-![](illustrations/ft_vs_icl.svg "LLMs learn in two modes. Which one is more language proficient?")
+\
+\
+![](illustrations/ft_vs_icl.jpg "LLMs learn in two modes. Which one is more language proficient?")
+
+
 - Bishwamittra Ghosh, Soumi Das, Qinyuan Wu, Mohammad Aflah Khan, Krishna P Gummadi, Evimaria Terzi, and Deepak Garg. **Learning without memorizing considered infeasible: Rethinking memorization in LLMs**. In Submission, 2025. URL https://openreview.net/pdf?id=KryACG4LGT.
+\
+\
 ![](illustrations/memorization_measures.svg "Contextual memorization disentangles between contextual learning and memorization, and connects learning-based memorization measures to privacy-based memorization measures.")
 
 
