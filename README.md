@@ -1,4 +1,4 @@
-## Understanding the Foundations of Large Language Models via Formal Language Learning
+## Investigating the Foundations of Large Language Models via Formal Language Learning
 Corresponding paper:
 - Bishwamittra Ghosh, Soumi Das, Till Speicher, Qinyuan Wu, Mohammad Aflah Khan, Deepak Garg, Krishna P Gummadi, and Evimaria
 Terzi. **Fine-tuning vs. in-context learning in large language models: A formal language learning perspective**. In Submission, 2025. URL: https://openreview.net/pdf?id=NZiaZoTaNq
