@@ -6,7 +6,7 @@ Corresponding papers:
 
 <p align="center"><img src="illustrations/ft_vs_icl.jpg" width="60%" alt="LLMs learn in two modes. Which one is more language proficient?"></p>
 
-- Bishwamittra Ghosh, Soumi Das, Qinyuan Wu, Mohammad Aflah Khan, Deepak Garg, Krishna P. Gummadi, and Evimaria Terzi. **Understanding the interplay between memorization and learning in large language models**. In Proc. NeurIPS, 2026 (ED track).
+- Bishwamittra Ghosh, Soumi Das, Qinyuan Wu, Mohammad Aflah Khan, Deepak Garg, Krishna P. Gummadi, and Evimaria Terzi. **Understanding the interplay between memorization and learning in large language models**. In Proc. NeurIPS, 2026 (Evaluations and Datasets Track).
 
 <p align="center"><img src="illustrations/memorization_measures.png" width="60%" alt="Contextual memorization disentangles between contextual learning and memorization, and connects learning-based memorization measures to privacy-based memorization measures."></p>
 
