@@ -182,7 +182,7 @@ def training(args, dataset_dict, max_sequence_length, unique_tokens, train_test_
 
     if(local_rank == 0):
         os.environ["WANDB_WATCH"] = "all"
-        os.environ["WANDB_API_KEY"]="cd8d79cbe96f9d1e1d5fbf1b4829ee38e3e2f76f"
+        os.environ["WANDB_API_KEY"]=os.getenv("WANDB_API_KEY", "")
         os.environ["WANDB__SERVICE_WAIT"] = "300"
         wandb_project_name = "diff_training_modes_acl"
         os.environ["WANDB_PROJECT"] = wandb_project_name

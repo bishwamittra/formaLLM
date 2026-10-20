@@ -1,7 +1,7 @@
 import os
 # specify cache
-os.environ["HF_HUB_CACHE"] = "/NS/formal-grammar-and-memorization/nobackup/shared/huggingface_cache/hub"
-os.environ["HF_DATASETS_CACHE"] = "/NS/formal-grammar-and-memorization/nobackup/shared/huggingface_cache/datasets"
+os.environ["HF_HUB_CACHE"] = "/path/to/shared/huggingface_cache/hub"
+os.environ["HF_DATASETS_CACHE"] = "/path/to/shared/huggingface_cache/datasets"
 
 
 
@@ -87,9 +87,9 @@ if not args_current.conflict:
         # "memorization_more_test_data/generalization/incontext_learning/base_model_performance": None,
         # "memorization_more_test_data/generalization/fine-tuning/without_checkpoints": None,
         # "counterfactual_memorization_with_mitigation/generalization/fine-tuning/without_checkpoints": None,
-        # "counterfactual_memorization/memorization/fine-tuning/without_checkpoints": None,
+        "counterfactual_memorization/memorization/fine-tuning/without_checkpoints": None,
         # "counterfactual_memorization/memorization/fine-tuning/test": None,
-        # "counterfactual_memorization/memorization/incontext_learning/base_model_performance": None,
+        "counterfactual_memorization/memorization/incontext_learning/base_model_performance": None,
         "counterfactual_memorization_nlp/memorization/fine-tuning/without_checkpoints": None,
         # "undertrained_tokens/generalization/incontext_learning/base_model_performance": None,
         # "undertrained_tokens/generalization/fine-tuning/without_checkpoints": None,
@@ -465,101 +465,102 @@ for experiment in experiment_dict:
 
         if not os.path.exists(store_filename_optimal_auc) or not os.path.exists(store_filename_auc_average):
             assert 'test_sequences' in df['eval_dataset'].unique()
-            if df['eval_dataset'].nunique() < 2:
+            if df['eval_dataset'].nunique() < 2 or args['adaptive_training']:
                 pd.DataFrame([]).to_csv(store_filename_optimal_auc, index=False)
                 pd.DataFrame([]).to_csv(store_filename_auc_average, index=False)
-                continue
-
-            # compute per-string loss. Get sample id
-            df_list_temp = []        
-            for key, df_item in df.groupby(['epoch', 'eval_dataset']):
-                df_item['sample_id'] = (df_item['length_input_tokens'] == 0).cumsum() - 1
-                df_list_temp.append(df_item)
-            df = pd.concat(df_list_temp)
-
-            print(df.groupby(['epoch', 'eval_dataset'])['sample_id'].max())
-            result_inductive_bias_discriminative = []
-            for epoch in df['epoch'].unique():
-
-                
-                df_working = df[(df['epoch'] == epoch)]
-
-                df_sample_average = df_working.groupby(['eval_dataset', 'sample_id']).aggregate({
-                    'target_token_negative_log_prob': 'mean',
-                    'correct': 'mean',      
-                }).reset_index() 
-                
-                
-                for dataset in df_sample_average['eval_dataset'].unique():
-                        
-                    if 'test_sequences' in dataset:
-                        continue
-
-                    print(dataset)
-                    
-                    xy = df_sample_average[df_sample_average['eval_dataset'].isin(['test_sequences', dataset])].copy()
-                    num_base_dataset = xy[xy['eval_dataset'] == 'test_sequences'].shape[0]
-                    num_compared_dataset = xy[xy['eval_dataset'] == dataset].shape[0]
-                    
-
-                    if num_compared_dataset < 2:
-                        auc = None
-                    else:
-
-
-
-                        xy['label'] = xy.apply(lambda x: 1 if x['eval_dataset'] == 'test_sequences' else 0, axis=1)
-
-
-                        seed = 5
-                        xy = xy[['target_token_negative_log_prob', 'label']]
-                        xy = xy.sample(frac=1, random_state=seed).reset_index(drop=True)
-                        train, test = train_test_split(xy, 
-                                                    stratify=xy['label'],
-                                                    test_size=0.5, 
-                                                    random_state=seed)
-
-
-                        clf = LogisticRegression(random_state=0)
-                        train = train.reset_index(drop=True)
-                        test = test.reset_index(drop=True)
-                        clf.fit(train[['target_token_negative_log_prob']], train['label'])
-                        score = clf.score(test[['target_token_negative_log_prob']], test['label'])
-                        probs = clf.predict_proba(test[['target_token_negative_log_prob']])[:, 1]
-                        auc = roc_auc_score(test['label'], probs)
-                        fpr, tpr, thresholds = roc_curve(test['label'], probs)
-
-
-                    
-                    result_inductive_bias_discriminative.append({
-                        "epoch" : epoch,
-                        "eval_dataset" : dataset,
-                        "auc": auc
-                    })
-
-
-                    
-
-                
-            result_inductive_bias_discriminative_df = pd.DataFrame(result_inductive_bias_discriminative)
-            result_inductive_bias_discriminative_df.to_csv(store_filename_auc_average, index=False)
-
-            
-            # optimal auc epoch
-            if 'non_grammatical_test_sequences_edit_distance_1' in result_inductive_bias_discriminative_df['eval_dataset'].unique():
-                optimal_auc_epoch = result_inductive_bias_discriminative_df[result_inductive_bias_discriminative_df['eval_dataset'] == 'non_grammatical_test_sequences_edit_distance_1'].groupby(['epoch']).aggregate({'auc': 'mean'})['auc'].idxmax()
-                result_inductive_bias_discriminative_df[result_inductive_bias_discriminative_df['epoch'] == optimal_auc_epoch].to_csv(store_filename_optimal_auc, index=False)
             else:
-                edit_1_datasets = [eval_dataset for eval_dataset in result_inductive_bias_discriminative_df['eval_dataset'].unique() if 'non_grammatical_test_sequences_edit_distance_1' in eval_dataset]
-                if len(edit_1_datasets) == 0:
-                    pd.DataFrame([]).to_csv(store_filename_optimal_auc, index=False)
-                else:
-                    # accumulate over all edit_1_datasets
-                    result_inductive_bias_discriminative_df_accumulated = result_inductive_bias_discriminative_df[
-                        result_inductive_bias_discriminative_df['eval_dataset'].isin(edit_1_datasets)
-                    ].groupby(['epoch'])['auc'].sum().reset_index()
-                    optimal_auc_epoch = result_inductive_bias_discriminative_df_accumulated.groupby(['epoch']).aggregate({'auc': 'mean'})['auc'].idxmax()
+
+
+                # compute per-string loss. Get sample id
+                df_list_temp = []        
+                for key, df_item in df.groupby(['epoch', 'eval_dataset']):
+                    df_item['sample_id'] = (df_item['length_input_tokens'] == 0).cumsum() - 1
+                    df_list_temp.append(df_item)
+                df = pd.concat(df_list_temp)
+
+                print(df.groupby(['epoch', 'eval_dataset'])['sample_id'].max())
+                result_inductive_bias_discriminative = []
+                for epoch in df['epoch'].unique():
+
+                    
+                    df_working = df[(df['epoch'] == epoch)]
+
+                    df_sample_average = df_working.groupby(['eval_dataset', 'sample_id']).aggregate({
+                        'target_token_negative_log_prob': 'mean',
+                        'correct': 'mean',      
+                    }).reset_index() 
+                    
+                    
+                    for dataset in df_sample_average['eval_dataset'].unique():
+                            
+                        if 'test_sequences' in dataset:
+                            continue
+
+                        print(dataset)
+                        
+                        xy = df_sample_average[df_sample_average['eval_dataset'].isin(['test_sequences', dataset])].copy()
+                        num_base_dataset = xy[xy['eval_dataset'] == 'test_sequences'].shape[0]
+                        num_compared_dataset = xy[xy['eval_dataset'] == dataset].shape[0]
+                        
+
+                        if num_compared_dataset < 2:
+                            auc = None
+                        else:
+
+
+
+                            xy['label'] = xy.apply(lambda x: 1 if x['eval_dataset'] == 'test_sequences' else 0, axis=1)
+
+
+                            seed = 5
+                            xy = xy[['target_token_negative_log_prob', 'label']]
+                            xy = xy.sample(frac=1, random_state=seed).reset_index(drop=True)
+                            train, test = train_test_split(xy, 
+                                                        stratify=xy['label'],
+                                                        test_size=0.5, 
+                                                        random_state=seed)
+
+
+                            clf = LogisticRegression(random_state=0)
+                            train = train.reset_index(drop=True)
+                            test = test.reset_index(drop=True)
+                            clf.fit(train[['target_token_negative_log_prob']], train['label'])
+                            score = clf.score(test[['target_token_negative_log_prob']], test['label'])
+                            probs = clf.predict_proba(test[['target_token_negative_log_prob']])[:, 1]
+                            auc = roc_auc_score(test['label'], probs)
+                            fpr, tpr, thresholds = roc_curve(test['label'], probs)
+
+
+                        
+                        result_inductive_bias_discriminative.append({
+                            "epoch" : epoch,
+                            "eval_dataset" : dataset,
+                            "auc": auc
+                        })
+
+
+                        
+
+                    
+                result_inductive_bias_discriminative_df = pd.DataFrame(result_inductive_bias_discriminative)
+                result_inductive_bias_discriminative_df.to_csv(store_filename_auc_average, index=False)
+
+                
+                # optimal auc epoch
+                if 'non_grammatical_test_sequences_edit_distance_1' in result_inductive_bias_discriminative_df['eval_dataset'].unique():
+                    optimal_auc_epoch = result_inductive_bias_discriminative_df[result_inductive_bias_discriminative_df['eval_dataset'] == 'non_grammatical_test_sequences_edit_distance_1'].groupby(['epoch']).aggregate({'auc': 'mean'})['auc'].idxmax()
                     result_inductive_bias_discriminative_df[result_inductive_bias_discriminative_df['epoch'] == optimal_auc_epoch].to_csv(store_filename_optimal_auc, index=False)
+                else:
+                    edit_1_datasets = [eval_dataset for eval_dataset in result_inductive_bias_discriminative_df['eval_dataset'].unique() if 'non_grammatical_test_sequences_edit_distance_1' in eval_dataset]
+                    if len(edit_1_datasets) == 0:
+                        pd.DataFrame([]).to_csv(store_filename_optimal_auc, index=False)
+                    else:
+                        # accumulate over all edit_1_datasets
+                        result_inductive_bias_discriminative_df_accumulated = result_inductive_bias_discriminative_df[
+                            result_inductive_bias_discriminative_df['eval_dataset'].isin(edit_1_datasets)
+                        ].groupby(['epoch'])['auc'].sum().reset_index()
+                        optimal_auc_epoch = result_inductive_bias_discriminative_df_accumulated.groupby(['epoch']).aggregate({'auc': 'mean'})['auc'].idxmax()
+                        result_inductive_bias_discriminative_df[result_inductive_bias_discriminative_df['epoch'] == optimal_auc_epoch].to_csv(store_filename_optimal_auc, index=False)
 
 
         if not os.path.exists(store_filename_optimal_auc_per_rule) or not os.path.exists(store_filename_auc_average_per_rule):
@@ -567,7 +568,7 @@ for experiment in experiment_dict:
             
             if len(eval_dataset_covered_by_rule) == 0 or args['include_grammar_rule_data'] == False:
                 pd.DataFrame([]).to_csv(store_filename_optimal_auc_per_rule, index=False)
-                continue
+                
             
             assert len(eval_dataset_covered_by_rule) % 2 == 0
 
@@ -1017,12 +1018,12 @@ for experiment in experiment_dict:
             if (not args['incontext_input']) and (args['incontext_data_source'] is not None): # ood case
                 print("Skipping: ", store_filename_memorization_results)
                 pd.DataFrame([]).to_csv(store_filename_memorization_results, index=False)
-                continue
+                
 
             if args['grammar_name'].endswith("multilingual"):
                 print("Skipping: ", store_filename_memorization_results)
                 pd.DataFrame([]).to_csv(store_filename_memorization_results, index=False)
-                continue
+                
 
 
             df_item_test_loss = pd.read_csv(store_filename_average)

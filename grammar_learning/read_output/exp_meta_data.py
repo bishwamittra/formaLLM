@@ -18,24 +18,24 @@ grammar_goodname = {
 
 
 model_revised_location = {
-    "base_models_soumi/opt-model-1.3B": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-1.3B",
-    "base_models_soumi/opt-model-2.7B": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-2.7B",
-    "base_models_soumi/opt-model-6.7B": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-6.7B",
+    "base_models/opt-model-1.3B": "/path/to/opt-model-1.3B",
+    "base_models/opt-model-2.7B": "/path/to/opt-model-2.7B",
+    "base_models/opt-model-6.7B": "/path/to/opt-model-6.7B",
 
-    "base_models_soumi//opt-model-1.3B": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-1.3B",
-    "base_models_soumi//opt-model-2.7B": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-2.7B",
-    "base_models_soumi//opt-model-6.7B": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-6.7B",
+    "base_models//opt-model-1.3B": "/path/to/opt-model-1.3B",
+    "base_models//opt-model-2.7B": "/path/to/opt-model-2.7B",
+    "base_models//opt-model-6.7B": "/path/to/opt-model-6.7B",
 
-    "/NS/llm-1/nobackup/soumi/opt-model-1.3B": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-1.3B",
-    "/NS/llm-1/nobackup/soumi/opt-model-2.7B": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-2.7B",
-    "/NS/llm-1/nobackup/soumi/opt-model-6.7B": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-6.7B",
+    "/path/to/opt-model-1.3B": "/path/to/opt-model-1.3B",
+    "/path/to/opt-model-2.7B": "/path/to/opt-model-2.7B",
+    "/path/to/opt-model-6.7B": "/path/to/opt-model-6.7B",
 
 
-    "base_models_vnanda/Llama-2-7b-hf": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/vnanda/Llama-2-7b-hf",
-    "base_models_vnanda/Llama-2-13b-hf": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/vnanda/Llama-2-13b-hf",
+    "base_models/Llama-2-7b-hf": "/path/to/Llama-2-7b-hf",
+    "base_models/Llama-2-13b-hf": "/path/to/Llama-2-13b-hf",
 
-    "/NS/llm-1/nobackup/vnanda/llm_base_models/Llama-2-7b-hf": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/vnanda/Llama-2-7b-hf",
-    "/NS/llm-1/nobackup/vnanda/llm_base_models/Llama-2-13b-hf": "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/vnanda/Llama-2-13b-hf",
+    "/path/to/llm_base_models/Llama-2-7b-hf": "/path/to/Llama-2-7b-hf",
+    "/path/to/llm_base_models/Llama-2-13b-hf": "/path/to/Llama-2-13b-hf",
 
 
 }
@@ -102,20 +102,20 @@ model_goodname = {
     "google/gemma-2-2b": "Gemma-2-2B",
     "google/gemma-2-9b": "Gemma-2-9B",
 
-    "/NS/llm-1/nobackup/soumi/opt-model-1.3B": "Opt-1.3B",
-    "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-1.3B": "Opt-1.3B",
-    "base_models_soumi/opt-model-1.3B": "Opt-1.3B",
-    "/NS/llm-1/nobackup/soumi/opt-model-2.7B": "Opt-2.7B",
-    "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-2.7B": "Opt-2.7B",
-    "base_models_soumi/opt-model-2.7B": "Opt-2.7B",
-    "/NS/llm-1/nobackup/soumi/opt-model-6.7B": "Opt-6.7B",
-    "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/soumi/opt-model-6.7B": "Opt-6.7B",
-    "base_models_soumi/opt-model-6.7B": "Opt-6.7B",
+    "/path/to/opt-model-1.3B": "Opt-1.3B",
+    "/path/to/opt-model-1.3B": "Opt-1.3B",
+    "base_models/opt-model-1.3B": "Opt-1.3B",
+    "/path/to/opt-model-2.7B": "Opt-2.7B",
+    "/path/to/opt-model-2.7B": "Opt-2.7B",
+    "base_models/opt-model-2.7B": "Opt-2.7B",
+    "/path/to/opt-model-6.7B": "Opt-6.7B",
+    "/path/to/opt-model-6.7B": "Opt-6.7B",
+    "base_models/opt-model-6.7B": "Opt-6.7B",
 
-    "/NS/llm-1/nobackup/vnanda/llm_base_models/Llama-2-7b-hf": "Llama-2-7B",
-    "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/vnanda/Llama-2-7b-hf": "Llama-2-7B",
-    "/NS/llm-1/nobackup/vnanda/llm_base_models/Llama-2-13b-hf": "Llama-2-13B",
-    "/NS/formal-grammar-and-memorization/nobackup/bghosh/temp_models/vnanda/Llama-2-13b-hf": "Llama-2-13B",
-    "base_models_vnanda/Llama-2-13b-hf": "Llama-2-13B",
+    "/path/to/llm_base_models/Llama-2-7b-hf": "Llama-2-7B",
+    "/path/to/Llama-2-7b-hf": "Llama-2-7B",
+    "/path/to/llm_base_models/Llama-2-13b-hf": "Llama-2-13B",
+    "/path/to/Llama-2-13b-hf": "Llama-2-13B",
+    "base_models/Llama-2-13b-hf": "Llama-2-13B",
 }
 

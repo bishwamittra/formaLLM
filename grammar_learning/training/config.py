@@ -37,12 +37,12 @@ lr_dict = {
 
     # add local model paths and their learning rates here
 
-    "/NS/llm-1/nobackup/vnanda/llm_base_models/Llama-2-7b-hf": 0.000005,
-    "/NS/llm-1/nobackup/vnanda/llm_base_models/Llama-2-13b-hf": 0.000005,
+    "/path/to/llm_base_models/Llama-2-7b-hf": 0.000005,
+    "/path/to/llm_base_models/Llama-2-13b-hf": 0.000005,
 
-    "/NS/llm-1/nobackup/soumi/opt-model-1.3B": 0.000005,
-    "/NS/llm-1/nobackup/soumi/opt-model-2.7B": 0.000005,
-    "/NS/llm-1/nobackup/soumi/opt-model-6.7B": 0.000005,
+    "/path/to/opt-model-1.3B": 0.000005,
+    "/path/to/opt-model-2.7B": 0.000005,
+    "/path/to/opt-model-6.7B": 0.000005,
 
     
 }
@@ -68,12 +68,12 @@ batch_size_dict = {
 
     # add local model paths and their batch sizes here
 
-    "/NS/llm-1/nobackup/vnanda/llm_base_models/Llama-2-7b-hf": 8,
-    "/NS/llm-1/nobackup/vnanda/llm_base_models/Llama-2-13b-hf": 8,
+    "/path/to/llm_base_models/Llama-2-7b-hf": 8,
+    "/path/to/llm_base_models/Llama-2-13b-hf": 8,
 
 
-    "/NS/llm-1/nobackup/soumi/opt-model-1.3B": 8,
-    "/NS/llm-1/nobackup/soumi/opt-model-2.7B": 8,
-    "/NS/llm-1/nobackup/soumi/opt-model-6.7B": 8,
+    "/path/to/opt-model-1.3B": 8,
+    "/path/to/opt-model-2.7B": 8,
+    "/path/to/opt-model-6.7B": 8,
 
 }

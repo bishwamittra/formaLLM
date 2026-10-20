@@ -4,7 +4,11 @@ __pycache__/*
 */__pycache__/*
 */*/__pycache__/*
 
+# Benchmark datasets are published on HuggingFace, not tracked here:
+# https://huggingface.co/datasets/formallm/formal-grammar-llm-benchmark
 grammar_learning/data
+*.pkl
+
 grammar_learning/_data_backup*
 grammar_learning/read_output/backup_results
 grammar_learning/read_output/results
@@ -22,5 +26,12 @@ grammar_learning/training/*.out
 grammar_learning/training/todo_and_log/*.err
 grammar_learning/training/todo_and_log/*.out
 
-
 do_not_run.sh
+anonymize.py
+copy_data.sh
+todo_hf.sh
+
+# Dataset-publishing tooling is internal; convert_to_parquet.py is kept because
+# its docstring documents the schema of the published HuggingFace dataset.
+hf_upload/*
+!hf_upload/convert_to_parquet.py

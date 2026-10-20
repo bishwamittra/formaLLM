@@ -289,6 +289,16 @@ def check_sequence_exists(grammar_parser, sequence):
     return parse_count > 0
 
 
+def get_grammar_parser(grammar_name):
+    """
+    Returns (BottomUpLeftCornerChartParser, PCFG) for the given grammar name.
+    Builds the grammar from the name string and wraps it in a chart parser.
+    """
+    grammar_string = get_grammar_string(grammar_name)
+    grammar = PCFG.fromstring(grammar_string)
+    return BottomUpLeftCornerChartParser(grammar), grammar
+
+
 
 def random_sentence_generator(grammar, 
                               num_samples, 
